@@ -5,7 +5,7 @@
 (() => {
 const ui = {};
 ['gl', 'app', 'stage', 'banner', 'bNo', 'bName', 'bSt', 'flash', 'winA', 'winB', 'nameA', 'nameB', 'go', 'reroll', 'card', 'cardBody', 'sheetBtn', 'sheetX',
-  'dexBtn', 'dexN', 'snd', 'loading', 'creditBtn', 'credits', 'creditList', 'picker', 'pickTitle', 'pickGrid', 'dex', 'dexSub', 'dexGrid', 'dexEmpty', 'tabSlot', 'tabCustom'].forEach(id => { ui[id] = document.getElementById(id); });
+  'dexBtn', 'dexN', 'snd', 'langBtn', 'shareBtn', 'imgBtn', 'shot', 'shotImg', 'shotDl', 'shotShare', 'toast', 'loading', 'creditBtn', 'credits', 'creditList', 'picker', 'pickTitle', 'pickGrid', 'dex', 'dexSub', 'dexGrid', 'dexEmpty', 'tabSlot', 'tabCustom'].forEach(id => { ui[id] = document.getElementById(id); });
 const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const now = () => performance.now() / 1000;
 const easeOut = p => 1 - (1 - p) ** 3;
@@ -353,7 +353,7 @@ function updateSeq(t) {
     const p = clamp((e - T2) / 0.95, 0, 1);
     q.built.group.scale.setScalar(Math.max(0.001, elastic(p))); q.built.group.rotation.y = (1 - easeOut(p)) * PI * 4;
     S.shake = (1 - p) * 0.1; S.raySpeed = 0.06 + (1 - p) * 3;
-    if (!q.shown && e > T2 + 0.3) { q.shown = true; showBanner(q.prof, true); renderCard(q.prof); sfx.fanfare(q.prof.stars); record(q); }
+    if (!q.shown && e > T2 + 0.3) { q.shown = true; showBanner(q.prof, true); renderCard(q.prof); sfx.fanfare(q.prof.stars); record(q); setCurrent(q.A, q.B, q.seed, q.prof); }
     if (p >= 1) { q.built.group.rotation.y = 0; S.shake = 0; seq = null; S.busy = false; busyUI(false); }
   }
 }
@@ -371,26 +371,113 @@ function pull() {
 
 /* ---------- 登场大字、档案卡 ---------- */
 function showBanner(p, slam) {
-  ui.bNo.textContent = no3(p.no) + ' 登场'; ui.bName.textContent = p.name; ui.bSt.textContent = stars(p.stars);
+  ui.bNo.textContent = TX.appears(no3(p.no)); ui.bName.textContent = p.name; ui.bSt.textContent = stars(p.stars);
   ui.banner.hidden = false; ui.banner.classList.remove('slam');
   if (slam) { void ui.banner.offsetWidth; ui.banner.classList.add('slam'); }
 }
 function renderCard(p) {
   ui.cardBody.innerHTML = `
-    <div class="c-top"><span class="no">${no3(p.no)}</span><span class="st" aria-label="危险度 ${p.stars} 星">${stars(p.stars)}</span></div>
+    <div class="c-top"><span class="no">${no3(p.no)}</span><span class="st" aria-label="${TX.danger(p.stars)}">${stars(p.stars)}</span></div>
     <h2>${p.name}</h2><p class="epi">${p.epithet}</p><p class="mix"><b>${p.a}</b> × <b>${p.b}</b></p>
     <dl class="facts">
-      <div><dt>身高</dt><dd>${p.height} 米</dd></div><div><dt>体重</dt><dd>${p.weight} 万吨</dd></div>
-      <div class="wide"><dt>出身地</dt><dd>${p.home}</dd></div>
-      <div class="wide"><dt>必杀技</dt><dd>${p.skill}</dd></div>
-      <div class="wide"><dt>弱点</dt><dd>${p.weak}</dd></div>
+      <div><dt>${TX.fHeight}</dt><dd>${p.height}</dd></div><div><dt>${TX.fWeight}</dt><dd>${p.weight}</dd></div>
+      <div class="wide"><dt>${TX.fHome}</dt><dd>${p.home}</dd></div>
+      <div class="wide"><dt>${TX.fSkill}</dt><dd>${p.skill}</dd></div>
+      <div class="wide"><dt>${TX.fWeak}</dt><dd>${p.weak}</dd></div>
     </dl>
-    <h3>缝合配方 · ${p.method}</h3>
+    <h3>${TX.recipe} · ${p.method}</h3>
     <ul class="parts">${p.parts.map(([k, v, r]) => `<li class="${r}"><span>${k}</span>${v}</li>`).join('')}</ul>
-    <h3>战力</h3>
-    <div class="bars">${p.stats.map(([k, v]) => `<div><span>${k}</span><i style="--v:0%" data-v="${v}"></i><b>${k === '离谱度' && v >= 96 ? '爆表' : v}</b></div>`).join('')}</div>
-    <h3>目击报告</h3><p class="lore">${p.lore}</p>`;
+    <h3>${TX.power}</h3>
+    <div class="bars">${p.stats.map(([k, v], i) => `<div><span>${k}</span><i style="--v:0%" data-v="${v}"></i><b>${i === 3 && v >= 96 ? TX.max : v}</b></div>`).join('')}</div>
+    <h3>${TX.report}</h3><p class="lore">${p.lore}</p>`;
   requestAnimationFrame(() => ui.cardBody.querySelectorAll('.bars i').forEach(i => i.style.setProperty('--v', i.dataset.v + '%')));
+}
+
+/* ---------- 分享：链接能还原同一只；图片是一张现画的卡片 ---------- */
+const SHARE_BASE = /\.github\.io$/.test(location.hostname) ? location.origin + location.pathname : 'https://heiseisyojyo.github.io/stitch-beast/';
+const beastId = (A, B, seed) => `${A.id}-${B.id}-${seed >>> 0}`;
+function readHash() {
+  const m = /^#?([a-z]+)-([a-z]+)-(\d{1,10})$/.exec(location.hash || '');
+  if (!m) return null;
+  const a = BIO.findIndex(x => x.id === m[1]), b = MECH.findIndex(x => x.id === m[2]);
+  return a < 0 || b < 0 ? null : { a, b, seed: Number(m[3]) >>> 0 };
+}
+function setCurrent(A, B, seed, prof) {
+  S.cur = { A, B, seed, prof, id: beastId(A, B, seed) };
+  if (location.hash !== '#' + S.cur.id) { try { location.replace('#' + S.cur.id); } catch (e) { /* 地址栏改不了也不影响玩 */ } }
+}
+let toastT = 0;
+function toast(msg) { ui.toast.textContent = msg; ui.toast.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { ui.toast.hidden = true; }, 2400); }
+async function share(file) {
+  const c = S.cur;
+  if (!c) return;
+  const data = { title: TX.title, text: TX.shareText(c.prof.name), url: SHARE_BASE + '#' + c.id };
+  if (file && navigator.canShare && navigator.canShare({ files: [file] })) data.files = [file];
+  if (navigator.share) { try { await navigator.share(data); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
+  try { await navigator.clipboard.writeText(data.text + ' ' + data.url); toast(TX.copied); } catch (e) { toast(data.url); }
+}
+/* 借主画布按小尺寸把舞台渲染一帧，拷出来 */
+function stageShot(w, h) {
+  const d0 = deb.visible;
+  deb.visible = false; renderer.setScissorTest(false); renderer.setPixelRatio(1); renderer.setSize(w, h, false); PSX.snap.set(w / 2, h / 2);
+  fitCam(w, h); renderer.clear(); renderer.render(stage, cam);
+  const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(ui.gl, 0, 0);
+  deb.visible = d0; resize();
+  return c;
+}
+function wrapText(x, text, maxW) {
+  const out = [], words = /[\u3000-\u9fff\uff00-\uffef]/.test(text) ? Array.from(text) : text.split(/(?<= )/);
+  let line = '';
+  for (const w of words) { if (line && x.measureText(line + w).width > maxW) { out.push(line.trimEnd()); line = w; } else line += w; }
+  if (line) out.push(line.trimEnd());
+  return out;
+}
+function drawCard() {
+  const c = S.cur, p = c.prof, W = 1080, Ht = 1350, cv = document.createElement('canvas'), x = cv.getContext('2d');
+  const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim(), fd = v('--f-display'), fb = v('--f-body');
+  cv.width = W; cv.height = Ht;
+  x.fillStyle = v('--cover'); x.fillRect(0, 0, W, Ht);
+  x.fillStyle = v('--shadow'); x.fillRect(52, 52, W - 88, Ht - 88);
+  x.fillStyle = v('--page'); x.strokeStyle = v('--ink'); x.lineWidth = 8; x.fillRect(40, 40, W - 88, Ht - 88); x.strokeRect(40, 40, W - 88, Ht - 88);
+  x.textBaseline = 'alphabetic';
+  x.fillStyle = v('--red'); x.font = `52px ${fd}`; x.fillText(TX.title, 76, 124);
+  x.font = `700 30px ${fb}`; const no = no3(p.no), nw = x.measureText(no).width;
+  x.fillStyle = v('--ink'); x.fillRect(W - 124 - nw, 84, nw + 32, 50); x.fillStyle = v('--page'); x.fillText(no, W - 108 - nw, 120);
+  const shot = stageShot(368, 276);
+  x.imageSmoothingEnabled = false; x.drawImage(shot, 76, 160, 920, 690); x.imageSmoothingEnabled = true;
+  x.lineWidth = 8; x.strokeStyle = v('--ink'); x.strokeRect(76, 160, 920, 690);
+  let fs = 112;
+  do { x.font = `${fs}px ${fd}`; fs -= 4; } while (x.measureText(p.name).width > 900 && fs > 40);
+  x.lineJoin = 'round'; x.fillStyle = v('--red'); x.fillText(p.name, 96, 852);
+  x.lineWidth = 18; x.strokeStyle = '#17130f'; x.strokeText(p.name, 88, 844); x.fillStyle = '#f8cf12'; x.fillText(p.name, 88, 844);
+  x.fillStyle = v('--red'); x.font = `44px ${fb}`; x.fillText(stars(p.stars), 76, 920);
+  x.fillStyle = v('--ink'); x.font = `700 36px ${fb}`; let y = 980;
+  for (const ln of wrapText(x, p.epithet, 920)) { x.fillText(ln, 76, y); y += 46; }
+  y += 14;
+  for (const [k, val] of [[TX.fHome, p.home], [TX.fSkill, p.skill], [TX.fWeak, p.weak]]) {
+    x.fillStyle = v('--dim'); x.font = `24px ${fb}`; x.fillText(k, 76, y);
+    x.fillStyle = v('--ink'); x.font = `700 30px ${fb}`;
+    const lines = wrapText(x, val, 760).slice(0, 2);
+    lines.forEach((ln, i) => x.fillText(ln, 236, y + i * 38));
+    y += Math.max(1, lines.length) * 38 + 14;
+  }
+  x.fillStyle = v('--dim'); x.font = `24px ${fb}`;
+  x.fillText(`${p.a} × ${p.b} · ${p.method}`, 76, Ht - 78);
+  const site = SHARE_BASE.replace(/^https?:\/\//, '').replace(/\/$/, ''); x.fillText(site, W - 76 - x.measureText(site).width, Ht - 78);
+  return cv;
+}
+let shotUrl = null, shotFile = null;
+function openShot() {
+  if (!S.cur || S.busy) return;
+  sfx.unlock(); sfx.click();
+  const done = () => drawCard().toBlob(b => {
+    if (!b) return;
+    if (shotUrl) URL.revokeObjectURL(shotUrl);
+    shotUrl = URL.createObjectURL(b); shotFile = new File([b], 'kaiju.png', { type: 'image/png' });
+    ui.shotImg.src = shotUrl; ui.shotDl.href = shotUrl; ui.shotDl.download = S.cur.prof.name + '.png';
+    ui.shot.showModal();
+  }, 'image/png');
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(done, done); else done();
 }
 
 /* ---------- 图鉴 ---------- */
@@ -407,7 +494,7 @@ function record(q) {
 function openDex() {
   if (S.busy) return;
   sfx.unlock(); sfx.click();
-  ui.dexSub.textContent = `已缝出 ${dex.length} 种，共 ${BIO.length * MECH.length} 种配对`;
+  ui.dexSub.textContent = TX.dexSub(dex.length, BIO.length * MECH.length);
   ui.dexEmpty.hidden = dex.length > 0;
   shoot(() => {
     ui.dexGrid.innerHTML = dex.map((d, i) => {
@@ -436,7 +523,7 @@ let thumbA = [], thumbB = [], pickReel = null;
 function setMode(m) {
   S.mode = m;
   ui.tabSlot.setAttribute('aria-selected', String(m === 'slot')); ui.tabCustom.setAttribute('aria-selected', String(m === 'custom'));
-  ui.app.classList.toggle('mode-custom', m === 'custom'); ui.go.textContent = m === 'slot' ? '拉杆！' : '合体！';
+  ui.app.classList.toggle('mode-custom', m === 'custom'); ui.go.textContent = m === 'slot' ? TX.go : TX.goCustom;
   lsSet('stitch-mode', m);
 }
 function openPicker(which) {
@@ -444,7 +531,7 @@ function openPicker(which) {
   sfx.unlock(); sfx.click();
   pickReel = which === 'a' ? reelA : reelB;
   const th = which === 'a' ? thumbA : thumbB;
-  ui.pickTitle.textContent = which === 'a' ? '挑一种生物' : '挑一件东西';
+  ui.pickTitle.textContent = which === 'a' ? TX.pickA : TX.pickB;
   ui.pickGrid.innerHTML = pickReel.items.map((it, i) => `<button class="cell" data-i="${i}" aria-current="${i === pickReel.index}"><img src="${th[i] || ''}" alt=""><span>${it.def.name}</span></button>`).join('');
   ui.picker.showModal();
 }
@@ -468,11 +555,20 @@ document.querySelectorAll('.step').forEach(b => b.addEventListener('click', () =
 }));
 ui.dexBtn.addEventListener('click', openDex);
 ui.creditBtn.addEventListener('click', () => {
-  const row = d => { const c = CREDITS[d.id]; return `<li><b>${d.name}</b><span>${c.title} · ${c.by} · ${c.lic}</span><a href="${c.page}" target="_blank" rel="noopener">模型页</a></li>`; };
-  ui.creditList.innerHTML = `<h3>生物</h3><ul>${BIO.map(row).join('')}</ul><h3>物件</h3><ul>${MECH.map(row).join('')}</ul>`;
+  const row = d => { const c = CREDITS[d.id]; return `<li><b>${d.name}</b><span>${c.title} · ${c.by} · ${c.lic}</span><a href="${c.page}" target="_blank" rel="noopener">${TX.modelPage}</a></li>`; };
+  ui.creditList.innerHTML = `<h3>${TX.groupA}</h3><ul>${BIO.map(row).join('')}</ul><h3>${TX.groupB}</h3><ul>${MECH.map(row).join('')}</ul>`;
   sfx.unlock(); sfx.click(); ui.credits.showModal();
 });
 ui.snd.addEventListener('click', () => { ui.snd.setAttribute('aria-pressed', String(sfx.toggle())); });
+ui.langBtn.textContent = L.tag; ui.langBtn.addEventListener('click', nextLang);
+ui.shareBtn.addEventListener('click', () => { sfx.unlock(); sfx.click(); share(null); });
+ui.imgBtn.addEventListener('click', openShot);
+ui.shotShare.addEventListener('click', () => share(shotFile));
+window.addEventListener('hashchange', () => {
+  const h = readHash();
+  if (!h || S.busy || !reelA || (S.cur && S.cur.id === beastId(BIO[h.a], MECH[h.b], h.seed))) return;
+  reelA.spinTo(h.a, 0.3, 0); reelB.spinTo(h.b, 0.3, 0); fuse(h.a, h.b, h.seed);
+});
 ui.snd.setAttribute('aria-pressed', String(sfx.on));
 ui.sheetBtn.addEventListener('click', () => { ui.card.classList.add('open'); sfx.unlock(); sfx.click(); });
 ui.sheetX.addEventListener('click', () => ui.card.classList.remove('open'));
@@ -529,19 +625,22 @@ function frame(ms) {
 resize();
 busyUI(true); dexCount(); setMode(lsGet('stitch-mode', 'slot') === 'custom' ? 'custom' : 'slot');
 window.__stitchReady = true;
-loadModels([...BIO, ...MECH], (n, all) => { ui.loading.textContent = `正在搬运素材 ${n}/${all}`; }).then(() => {
+ui.loading.textContent = TX.loading + '…';
+loadModels([...BIO, ...MECH], (n, all) => { ui.loading.textContent = `${TX.loading} ${n}/${all}`; }).then(() => {
   reelA = new Reel(ui.winA, ui.nameA, BIO, soloModel); reelB = new Reel(ui.winB, ui.nameB, MECH, soloModel);
   applyTheme();
   shoot(() => { thumbA = reelThumbs(reelA); thumbB = reelThumbs(reelB); });
-  const saved = lsGet('stitch-last', null);
+  /* 开机摆哪一只：链接里带着的优先，其次是上次那只，都没有就用默认的 */
+  const linked = readHash(), saved = lsGet('stitch-last', null);
   let ia = saved ? BIO.findIndex(x => x.id === saved.a) : 0, ib = saved ? MECH.findIndex(x => x.id === saved.b) : 0, seed0 = saved ? saved.seed >>> 0 : 20261113;
   if (ia < 0 || ib < 0) { ia = 0; ib = 0; seed0 = 20261113; }
+  if (linked) { ia = linked.a; ib = linked.b; seed0 = linked.seed; }
   reelA.jump(ia); reelB.jump(ib);
   S.beast = assemble(BIO[ia], MECH[ib], seed0); world.add(S.beast.group);
   const p0 = profile(BIO[ia], MECH[ib], seed0, S.beast.recipe);
-  showBanner(p0, false); renderCard(p0);
+  showBanner(p0, false); renderCard(p0); setCurrent(BIO[ia], MECH[ib], seed0, p0);
   ui.loading.hidden = true; S.busy = false; busyUI(false);
   window.__stitch = { S, reelA, reelB, fuse, pull, shoot, beastThumb, reelThumbs };
   requestAnimationFrame(frame);
-}).catch(e => { ui.loading.textContent = '素材没能载入，刷新页面再试一次。'; console.error(e); });
+}).catch(e => { ui.loading.textContent = TX.loadFail; console.error(e); });
 })();

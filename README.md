@@ -2,11 +2,14 @@
 
 左边抽一种生物，右边抽一件东西，把两个 3D 模型切开再缝成一只新怪兽。默认是老虎机随机抽，也可以自己挑。两边各 20 个原型，共 400 种配对。
 
+在线试玩：https://heiseisyojyo.github.io/stitch-beast/ 。界面有中文、English、日本語三种，按浏览器语言自动选。每只怪兽都有自己的链接，可以直接分享，也可以生成一张卡片图。
+
 纯静态页面，没有构建步骤。本地运行：在本目录执行 `python3 -m http.server`，然后打开 http://localhost:8000 。
 
 - `js/data.js` 两边的原型清单、摆放参数和文案
 - `js/fusion.js` 缝合：切割、接口收放、封口、布套
-- `js/main.js` 界面、卷轴、舞台演出、音效
+- `js/i18n.js` 三种语言的界面文字和英日文案
+- `js/main.js` 界面、卷轴、舞台演出、音效、分享与出图
 - `models/*.glb` 模型原件；`models/*.glb.js` 是页面实际载入的文本版，改了模型后运行 `python3 tools/pack.py` 重新生成
 
 ## 素材出处

@@ -1,14 +1,17 @@
 'use strict';
 /* fusion.js：把两只真实模型切开再缝上。
    每个模型有一根主轴：横着的（动物、车）沿 Z，头在 +Z；竖着的（植物、冰箱）沿 Y，头在 +Y。
-   四种缝法：
+   缝法分两类。
+   切开对接（车辆这类适合拦腰切的东西）：
      换头 / 拦腰对接 / 三段夹心   沿同一根轴对接。一横一竖时，身体保持原样，出头的那一方先转 90 度再接
      背上嫁接                     竖的那截种在横的背上，身体不切
+   整件安装（不该被切开的东西，由 data.js 里每个物件的 modes 指定，各有权重）：
+     wear 整件当头 / carry 整件背在背上 / tailprop 装在尾部 / topper 只取顶上那截装在头顶（会转）
+     hang 气囊用绳子吊着生物 / beam 悬在上方用光束吸着生物
    接口的处理：两截在接口附近各自收放到同一个尺寸再对上，切口按真实截面封口，外面包一圈带针脚的布套。
    同一个种子缝出同一只。 */
 
 const AX = { z: { u: 0, v: 1, w: 2 }, y: { u: 0, v: 2, w: 1 } };   // 沿 w 轴切，截面坐标是 (u, v)
-const KIND_NAME = { head: '换头', half: '拦腰对接', sandwich: '三段夹心', rider: '背上嫁接' };
 const smooth = x => x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x);
 
 /* ---------- 截面 ---------- */
@@ -65,11 +68,11 @@ function ellipseLoop(cu, cv, w, h, n = 12) {
 }
 const scaleLoop = (L, cu, cv, fu, fv) => ({ pts: L.pts.map(p => [cu + (p[0] - cu) * fu, cv + (p[1] - cv) * fv]), area: L.area * fu * fv, cu: cu + (L.cu - cu) * fu, cv: cv + (L.cv - cv) * fv, w: L.w * fu, h: L.h * fv });
 /* 模型在主轴比例 f 处的截面（带缓存）。main 是面积最大的那一圈，对接时以它为准 */
-function section(Mo, f) {
-  const key = Math.round(f * 1000);
+function section(Mo, f, ax) {
+  const axis = ax || (Mo.def.up ? 'y' : 'z'), key = axis + Math.round(f * 1000);
   let s = Mo.sec.get(key);
   if (!s) {
-    const axis = Mo.def.up ? 'y' : 'z', { u, v, w } = AX[axis], b0 = Mo.box.min.getComponent(w), c = b0 + (Mo.box.max.getComponent(w) - b0) * f;
+    const { u, v, w } = AX[axis], b0 = Mo.box.min.getComponent(w), c = b0 + (Mo.box.max.getComponent(w) - b0) * f;
     let loops = cutLoops(Mo.tris, axis, c);
     const real = loops.length > 0;
     if (!real) { const sz = Mo.box.getSize(new T.Vector3()), o = Mo.box.getCenter(new T.Vector3()); loops = [ellipseLoop(o.getComponent(u), o.getComponent(v), sz.getComponent(u) * 0.3, sz.getComponent(v) * 0.3)]; }
@@ -132,9 +135,9 @@ function collar(pts, cu, cv, axis, c, thick) {
 /* ---------- 切一截 ----------
    保留主轴上 [lo, hi] 这段（0..1 的比例，null 表示那头不切），用裁剪面隐藏其余部分。
    tap = { lo: [fu, fv], hi: [fu, fv] }：让这一截在接口处横向收放到给定倍数，离接口越远越接近原样。 */
-function makePiece(Mo, lo, hi, tap) {
-  const def = Mo.def, axis = def.up ? 'y' : 'z', { u, v, w } = AX[axis];
-  const sLo = lo != null ? section(Mo, lo) : null, sHi = hi != null ? section(Mo, hi) : null, cLo = sLo ? sLo.c : -1e9, cHi = sHi ? sHi.c : 1e9;
+function makePiece(Mo, lo, hi, tap, ax) {
+  const def = Mo.def, axis = ax || (def.up ? 'y' : 'z'), { u, v, w } = AX[axis];
+  const sLo = lo != null ? section(Mo, lo, axis) : null, sHi = hi != null ? section(Mo, hi, axis) : null, cLo = sLo ? sLo.c : -1e9, cHi = sHi ? sHi.c : 1e9;
   const span = Math.min(cHi, Mo.box.max.getComponent(w)) - Math.max(cLo, Mo.box.min.getComponent(w)), Lt = clamp(span * 0.55, 0.2, 0.9);
   const fl = tap && tap.lo, fh = tap && tap.hi;
   const group = new T.Group(), model = new T.Group(), planesL = [], planesW = [], mats = [], geos = [], cuts = {}, box = new T.Box3(), tmp = new T.Vector3(), seen = new Map();
@@ -233,15 +236,38 @@ function soloModel(def) {
   return fitToStage(root, Mo.box, def.float ? 0.25 : 0, ctx.ticks);
 }
 
+/* 从正上方往下找这一截在 (x, z) 处的表面高度；要在它还没被挪动之前调用 */
+function topAt(piece, x, z) {
+  piece.group.updateMatrixWorld(true);
+  const ray = new T.Raycaster(new T.Vector3(x, piece.box.max.y + 1, z), new T.Vector3(0, -1, 0)), h = ray.intersectObject(piece.model, true)[0];
+  return h ? h.point.y : piece.box.max.y;
+}
+/* 两点之间拉一根绳 */
+function rope(a, b) {
+  const m = new T.Mesh(G('rope', () => new T.CylinderGeometry(0.018, 0.018, 1, 4)), K.thread), d = b.clone().sub(a);
+  m.position.copy(a).addScaledVector(d, 0.5); m.scale.y = d.length(); m.quaternion.setFromUnitVectors(new T.Vector3(0, 1, 0), d.normalize());
+  return m;
+}
+const BEAM = psx(new T.MeshBasicMaterial({ color: lin('#fff27a'), transparent: true, opacity: 0.38, depthWrite: false, side: T.DoubleSide, fog: false }));
+const SPECIAL = ['wear', 'carry', 'tailprop', 'topper', 'hang', 'beam'];
+
 function assemble(A, B, seed) {
-  const ctx = begin(), R = rng(seed || 1), same = !!A.up === !!B.up, r = R(), coin = R() < 0.5, boost = 1 + R() * 0.3;
-  let kind, X, Y;   // X 出头（或背上那截），Y 出身体
-  if (!same && r < 0.22) { kind = 'rider'; X = A.up ? A : B; Y = A.up ? B : A; }
-  else { const q = same ? r : (r - 0.22) / 0.78; kind = q < 0.2 ? 'sandwich' : q < 0.62 ? 'head' : 'half'; X = coin ? A : B; Y = coin ? B : A; }
-  /* 一横一竖：身体保持原样，出头的那一方转 90 度，跟身体同一根轴 */
-  const MY = LIB[Y.id], MX = !same && kind !== 'rider' ? turned(LIB[X.id]) : LIB[X.id], hfX = kind === 'half' ? 0.5 : X.hf || 0.4, hfY = kind === 'half' ? 0.5 : Y.hf || 0.4;
-  const root = new T.Group(), bodyG = new T.Group(), hp = new T.Group(), pieces = [], extra = [];   // extra：布套、弯脖子这些现做的几何体
-  root.add(bodyG);
+  const ctx = begin(), R = rng(seed || 1), MA = LIB[A.id], MB = LIB[B.id], same = !!A.up === !!B.up, r = R(), coin = R() < 0.5, boost = 1 + R() * 0.3;
+  /* 先按物件自带的装法抽（各有权重），没抽中再走切开对接 */
+  let kind = null, acc = 0, X, Y;   // X 出头（或装上去的那件），Y 出身体
+  for (const [k, wt] of B.modes || []) { acc += wt; if (r < acc) { kind = k; break; } }
+  if (kind) { X = B; Y = A; }
+  else {
+    const q0 = (r - acc) / Math.max(1e-6, 1 - acc);
+    if (!same && q0 < 0.22) { kind = 'rider'; X = A.up ? A : B; Y = A.up ? B : A; }
+    else { const q = same ? q0 : (q0 - 0.22) / 0.78; kind = q < 0.2 ? 'sandwich' : q < 0.62 ? 'head' : 'half'; X = coin ? A : B; Y = coin ? B : A; }
+  }
+  const special = SPECIAL.includes(kind);
+  /* 切开对接时若一横一竖：身体保持原样，出头的那一方转 90 度，跟身体同一根轴 */
+  const MY = LIB[Y.id], MX = !special && !same && kind !== 'rider' ? turned(LIB[X.id]) : LIB[X.id];
+  const hfX = kind === 'half' ? 0.5 : X.hf || 0.4, hfY = kind === 'half' ? 0.5 : Y.hf || 0.4;
+  const root = new T.Group(), bodyG = new T.Group(), hp = new T.Group(), mount = new T.Group(), pieces = [], extra = [];   // extra：布套这些现做的几何体
+  root.add(bodyG); hp.add(mount);
   const keep = m => { extra.push(m.geometry); return m; };
   const fit = (sb, sh) => clamp(Math.sqrt((sb.w * sb.h) / Math.max(1e-4, sh.w * sh.h)), 0.6, 1.8);
   /* 两边接口各让一半：目标尺寸取两者的几何平均，各自的收放幅度封顶 */
@@ -251,14 +277,67 @@ function assemble(A, B, seed) {
   };
   /* 同轴接口的布套：在身体那截的坐标里，把两边轮廓一起包住 */
   const seam = (bp, bc, hc, s) => {
-    const pts = bc.main.pts.concat(hc.main.pts.map(p => [bc.main.cu + (p[0] - hc.main.cu) * s, bc.main.cv + (p[1] - hc.main.cv) * s]));
+    const pts = bc.main.pts.concat(hc ? hc.main.pts.map(p => [bc.main.cu + (p[0] - hc.main.cu) * s, bc.main.cv + (p[1] - hc.main.cv) * s]) : []);
     bp.group.add(keep(collar(pts, bc.main.cu, bc.main.cv, bp.axis, bc.c, 0.16)));
   };
-  let body, head, tail = null, tp = null, eyes = false, sH = 1, sT = 1;
+  /* 给装上去的那件垫一圈布：取它底部的水平截面 */
+  const saddle = (piece, y, s) => { const L0 = cutLoops(piece.Mo.tris, 'y', y)[0]; if (L0) piece.group.add(keep(collar(L0.pts, L0.cu, L0.cv, 'y', y, 0.12 / s))); };
+  let body, head, tail = null, tp = null, eyes = false, sH = 1, sT = 1, float = !!Y.float, spinner = null, still = false;
+  const ref = new T.Vector3();   // 装上去那件用哪个点去对锚点（它自己的坐标）
 
-  if (kind === 'rider') {
+  if (special) {
+    const up = !!MA.def.up, hfA = A.hf || 0.4;
+    body = kind === 'wear' ? makePiece(MA, null, 1 - hfA) : makePiece(MA, null, null);
+    const MO = kind === 'carry' && B.carryTurn ? turned(MB) : MB;
+    head = kind === 'topper' ? makePiece(MO, B.topper || 0.72, null, null, 'y') : kind === 'hang' ? makePiece(MO, B.hang || 0.3, null, null, 'y') : makePiece(MO, null, null);
+    head.Mo = MO;
+    const bb = body.box, hb = head.box, bs = bb.getSize(new T.Vector3()), hs = hb.getSize(new T.Vector3()), bcx = (bb.min.x + bb.max.x) / 2, bcz = (bb.min.z + bb.max.z) / 2;
+    hb.getCenter(ref);
+    if (kind === 'wear') {            // 生物切掉头，整件东西装在脖子上，脸朝前，配一对眼睛
+      addEyes(head, R); eyes = true;
+      const bc = body.cuts.hi, sb = bc.main;
+      sH = clamp(1.1 * Math.max(sb.w, sb.h) / Math.max(hs.x, hs.y), 0.25, 0.9);   // 头比脖子粗一圈就够，别把身体全挡住
+      if (up) ref.y = hb.min.y + hs.y * 0.06; else ref.z = hb.min.z + hs.z * 0.1;
+      seam(body, bc, null, 1); hp.position.copy(bc.P);
+    } else if (kind === 'carry') {    // 整件背在背上，底下垫一圈布
+      sH = clamp(0.75 * Math.max(bs.x, bs.z) / Math.max(hs.x, hs.y, hs.z), 0.35, 1.1) * boost;
+      ref.y = hb.min.y + hs.y * 0.05; saddle(head, ref.y + 0.03, sH);
+      hp.position.set(bcx, topAt(body, bcx, bcz), bcz); float = float || !!B.carryFloat;
+    } else if (kind === 'tailprop') { // 装在尾部，朝后吹
+      sH = clamp(0.85 * bs.y / hs.y, 0.3, 1.0) * boost; ref.z = hb.min.z + hs.z * 0.1; mount.rotation.y = PI;
+      const zr = up ? bb.min.z + bs.z * 0.15 : bb.min.z + bs.z * 0.06;
+      hp.position.set(bcx, bb.min.y + bs.y * (up ? 0.35 : 0.55), zr);
+    } else {                          // 顶上的三种：螺旋桨、气囊、飞碟。生物都飘起来
+      const hz = up ? bcz : bb.max.z - bs.z * hfA * 0.5, top = topAt(body, bcx, kind === 'topper' ? hz : bcz);
+      float = true;
+      if (kind === 'topper') {        // 只取顶上那截（螺旋桨），立在头顶上转
+        sH = clamp(1.0 * Math.max(bs.x, bs.z) / Math.max(hs.x, hs.z), 0.5, 1.3) * boost;
+        ref.y = head.cuts.lo.c; const L0 = head.cuts.lo.main;
+        head.group.add(keep(collar(L0.pts, L0.cu, L0.cv, 'y', ref.y, 0.1 / sH)));
+        ref.x = L0.cu; ref.z = L0.cv; hp.position.set(bcx, top - 0.03, hz); spinner = mount;
+      } else if (kind === 'hang') {   // 气囊悬在上方，四根绳子拴着生物
+        sH = clamp(1.5 * Math.max(bs.x, bs.z) / Math.max(hs.x, hs.z), 0.6, 1.6) * boost;
+        const c0 = head.cuts.lo, gap = 0.3 + bs.y * 0.1;
+        ref.set(c0.main.cu, c0.c, c0.main.cv); hp.position.set(bcx, top + gap, bcz);
+        const rim = hull(c0.main.pts), at = new T.Vector3(bcx, top - 0.04, bcz);
+        for (let i = 0; i < 4; i++) { const p = rim[Math.floor(i * rim.length / 4)]; bodyG.add(rope(new T.Vector3(bcx + (p[0] - ref.x) * sH, top + gap + 0.02, bcz + (p[1] - ref.z) * sH), at)); }
+        still = true;
+      } else {                        // 飞碟悬在上方，一道光束罩着生物
+        sH = clamp(1.3 * Math.max(bs.x, bs.z) / Math.max(hs.x, hs.z), 0.6, 1.5) * boost;
+        const gap = 0.45, y0 = top + gap, hgt = y0 - bb.min.y + 0.4, rT = hs.x * sH * 0.22, rB = Math.max(bs.x, bs.z) * 0.62;
+        ref.y = hb.min.y; hp.position.set(bcx, y0, bcz);
+        const beam = new T.Mesh(new T.CylinderGeometry(rT, rB, hgt, 12, 1, true), BEAM);
+        beam.position.set(bcx, y0 - hgt / 2 + 0.05, bcz); beam.renderOrder = 5; extra.push(beam.geometry); bodyG.add(beam);
+      }
+    }
+  } else if (kind === 'rider') {
     body = makePiece(MY, null, null); head = makePiece(MX, 1 - Math.max(hfX, 0.55), null);
     if (Y.kind === 'mech') { addEyes(body, R); eyes = true; }
+    /* 从正上方找到背的高度，把那截种上去，根部包一圈布套 */
+    const bb0 = body.box, hb = head.box, hc = head.cuts.lo, xc = (bb0.min.x + bb0.max.x) / 2, zc = (bb0.min.z + bb0.max.z) / 2;
+    sH = clamp(0.8 * (bb0.max.x - bb0.min.x) / Math.max(0.2, hb.max.x - hb.min.x), 0.6, 1.5) * boost;
+    head.group.add(keep(collar(hc.main.pts, hc.main.cu, hc.main.cv, head.axis, hc.c + 0.03 / sH, 0.14 / sH)));
+    ref.copy(hc.P); hp.position.set(xc, topAt(body, xc, zc) - 0.05, zc);
   } else {
     const fX = 1 - (kind === 'sandwich' ? Math.min(hfX, 0.36) : hfX), fY = kind === 'sandwich' ? 0.7 : 1 - hfY;
     const sb = section(MY, fY).main, sh = section(MX, fX).main;
@@ -269,76 +348,62 @@ function assemble(A, B, seed) {
     body = makePiece(MY, kind === 'sandwich' ? 0.3 : null, fY, tapB); head = makePiece(MX, fX, null, { lo: m1.h });
     if (kind === 'sandwich') tail = makePiece(MX, null, 0.3, { hi: m2.h });
     if (X.kind === 'mech') { addEyes(head, R); eyes = true; }
-  }
-  pieces.push(body, head);
-
-  const hc = head.cuts.lo;
-  if (kind === 'rider') {       // 从正上方找到背的高度，把那截种上去，根部包一圈布套
-    const bb0 = body.box, hb = head.box, xc = (bb0.min.x + bb0.max.x) / 2, zc = (bb0.min.z + bb0.max.z) / 2, ray = new T.Raycaster();
-    body.group.updateMatrixWorld(true);
-    ray.set(new T.Vector3(xc, bb0.max.y + 1, zc), new T.Vector3(0, -1, 0));
-    const hit = ray.intersectObject(body.model, true)[0];
-    sH = clamp(0.8 * (bb0.max.x - bb0.min.x) / Math.max(0.2, hb.max.x - hb.min.x), 0.6, 1.5) * boost;
-    head.group.add(keep(collar(hc.main.pts, hc.main.cu, hc.main.cv, head.axis, hc.c + 0.03 / sH, 0.14 / sH)));
-    hp.position.set(xc, (hit ? hit.point.y : bb0.max.y) - 0.05, zc);
-  } else {
-    seam(body, body.cuts.hi, hc, sH);
-    hp.position.copy(body.cuts.hi.P);
+    seam(body, body.cuts.hi, head.cuts.lo, sH);
+    ref.copy(head.cuts.lo.P); hp.position.copy(body.cuts.hi.P);
     if (tail) {
       const tc = tail.cuts.hi;
       seam(body, body.cuts.lo, tc, sT);
       tail.group.scale.setScalar(sT); tail.group.position.copy(tc.P).multiplyScalar(-sT);
-      tp = new T.Group(); tp.position.copy(body.cuts.lo.P); tp.add(tail.group); bodyG.add(tp); pieces.push(tail);
+      tp = new T.Group(); tp.position.copy(body.cuts.lo.P); tp.add(tail.group); bodyG.add(tp);
     }
   }
-  head.group.scale.setScalar(sH); head.group.position.copy(hc.P).multiplyScalar(-sH);
-  hp.add(head.group);
+  pieces.push(body, head); if (tail) pieces.push(tail);
+  head.group.scale.setScalar(sH); head.group.position.copy(ref).multiplyScalar(-sH);
+  mount.add(head.group);
   bodyG.add(body.group, hp);
 
-  const float = !!Y.float, wagAxis = MY.def.up ? 'z' : 'y';
+  const wagAxis = MY.def.up ? 'z' : 'y';
   tick(t => {
     const sq = float ? 0 : Math.cos(t * 6.6) * 0.035;
     bodyG.position.y = float ? Math.sin(t * 1.6) * 0.1 : Math.abs(Math.sin(t * 3.3)) * 0.1;
     bodyG.scale.set(1 - sq * 0.5, 1 + sq, 1 - sq * 0.5);
-    hp.rotation.set(Math.sin(t * 2.3) * 0.07, Math.sin(t * 0.9) * 0.12, Math.sin(t * 1.7) * 0.06);
+    if (spinner) spinner.rotation.y = t * 13;
+    else if (still) hp.rotation.set(Math.sin(t * 1.1) * 0.03, 0, Math.sin(t * 0.8) * 0.03);
+    else hp.rotation.set(Math.sin(t * 2.3) * 0.07, Math.sin(t * 0.9) * 0.12, Math.sin(t * 1.7) * 0.06);
     if (tp) tp.rotation[wagAxis] = Math.sin(t * 3) * 0.14;
     for (const p of pieces) p.update();
   });
 
   for (const fn of ctx.ticks) fn(0);
   root.updateMatrixWorld(true);
-  const bb = new T.Box3();
-  for (const p of pieces) bb.union(p.box.clone().applyMatrix4(p.group.matrixWorld));
-  const out = fitToStage(root, bb, float ? 0.4 : 0, ctx.ticks);
+  const bbx = new T.Box3();
+  for (const p of pieces) bbx.union(p.box.clone().applyMatrix4(p.group.matrixWorld));
+  const out = fitToStage(root, bbx, float ? 0.4 : 0, ctx.ticks);
   out.recipe = { kind, head: X, body: Y, eyes };
   out.dispose = () => { for (const p of pieces) { p.mats.forEach(m => m.dispose()); p.geos.forEach(g => g.dispose()); } extra.forEach(g => g.dispose()); };
   return out;
 }
 
-/* 档案：名字、称号、身高体重、必杀技、弱点、数值、目击报告，全部由种子决定 */
+/* 档案：名字、称号、身高体重、必杀技、弱点、数值、目击报告，全部由种子决定；文字按当前语言（见 i18n.js）拼 */
 function profile(A, B, seed, recipe) {
-  const R = rng((seed ^ 0x9e3779b9) >>> 0);
+  const R = rng((seed ^ 0x9e3779b9) >>> 0), F = L.fmt, P = L.parts;
   const x = R(), stars = x < 0.4 ? 1 : x < 0.7 ? 2 : x < 0.88 ? 3 : x < 0.97 ? 4 : 5;
-  const suffix = [['怪', '兽'], ['兽', '怪'], ['兽', '王'], ['王', '皇'], ['皇', '神']][stars - 1];
-  const name = pick(R, B.pre) + A.short + pick(R, suffix);
+  const name = F.name(pick(R, B.pre), A.short, pick(R, L.suffix[stars - 1]));
   const st = [0, 1, 2].map(i => clamp(Math.round((A.stat[i] + B.stat[i]) / 2 + (R() - 0.5) * 22 + stars * 3), 5, 100));
-  const X = recipe.head, Y = recipe.body, cls = d => (d.kind === 'bio' ? 'A' : 'B'), k = recipe.kind;
-  const parts = k === 'head' ? [['头', X.name, cls(X)], ['身体', Y.name, cls(Y)]]
-    : k === 'half' ? [['这一半', X.name, cls(X)], ['那一半', Y.name, cls(Y)]]
-      : k === 'rider' ? [['身体', Y.name, cls(Y)], ['背上', X.name, cls(X)]]
-        : [['头', X.name, cls(X)], ['腰', Y.name, cls(Y)], ['尾', X.name, cls(X)]];
-  if (recipe.eyes) parts.push(['眼睛', '后配的', 'none']);
+  const X = recipe.head, Y = recipe.body, cls = d => (d.kind === 'bio' ? 'A' : 'B'), k = recipe.kind, row = (label, d) => [label, d.name, cls(d)];
+  const second = { carry: P.back, tailprop: P.tailp, topper: P.top, hang: P.above, beam: P.above, rider: P.back }[k];
+  const parts = k === 'head' || k === 'wear' ? [row(P.head, X), row(P.body, Y)]
+    : k === 'half' ? [row(P.half1, X), row(P.half2, Y)]
+      : k === 'sandwich' ? [row(P.head, X), row(P.waist, Y), row(P.tail, X)]
+        : [row(P.body, Y), row(second, X)];
+  if (recipe.eyes) parts.push([P.eyes, P.eyesVal, 'none']);
+  const epithet = F.epithet(pick(R, B.epi), pick(R, A.epi)), height = Math.round(28 + R() * 46 + stars * 7), weight = (0.8 + R() * 5 + stars * 0.9).toFixed(1);
+  const skill = F.skill(pick(R, B.atk), pick(R, A.atk)), lore = F.lore(pick(R, A.habit), pick(R, B.quirk));
   return {
     no: BIO.indexOf(A) * MECH.length + MECH.indexOf(B) + 1,
-    name, stars, method: KIND_NAME[k], parts,
-    epithet: pick(R, B.epi) + '的' + pick(R, A.epi),
-    height: Math.round(28 + R() * 46 + stars * 7),
-    weight: (0.8 + R() * 5 + stars * 0.9).toFixed(1),
-    home: A.home + '的' + B.place,
-    skill: pick(R, B.atk) + '·' + pick(R, A.atk),
-    weak: B.weak,
-    lore: pick(R, A.habit) + '，' + pick(R, B.quirk) + '。',
-    stats: [['破坏力', st[0]], ['速度', st[1]], ['装甲', st[2]], ['离谱度', Math.round(78 + R() * 22)]],
+    name, stars, method: L.kind[k], parts, epithet, skill, lore,
+    height: F.height(height), weight: F.weight(weight), home: F.home(A.home, B.place), weak: B.weak,
+    stats: [st[0], st[1], st[2], Math.round(78 + R() * 22)].map((v, i) => [L.stats[i], v]),
     a: A.name, b: B.name,
   };
 }
