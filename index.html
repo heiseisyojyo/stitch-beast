@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>缝合兽制造机</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=ZCOOL+QingKe+HuangYou&display=swap">
+<style>
+/* 布局：一台机器。上面是合体舞台，下面的操作台放两个卷轴和拉杆，右边一张怪兽档案卡；窄屏时档案卡收成底部抽屉。
+   调子：老式儿童怪兽图鉴。信号黄封面、黑墨线、朱红标题、钴蓝放射线。 */
+:root {
+  --cover: #f8cf12;   /* 封面黄：页面底 */
+  --page: #fff8e3;    /* 内页纸：面板 */
+  --ink: #17130f;     /* 墨线与正文 */
+  --red: #de2a1b;     /* 朱红：标题、拉杆 */
+  --blue: #1746b0;    /* 钴蓝：生物一侧、舞台 */
+  --ray-a: #2c62dc; --ray-b: #1746b0; --ray-glow: #bfe0ff;   /* 舞台放射线，中心往 glow 提亮 */
+  --well: #ffe98a;    /* 卷轴窗口底 */
+  --dim: #6b5f49;
+  --on-red: #fff8e3;
+  --name: #f8cf12;    /* 登场大字 */
+  --shadow: #17130f;
+  --f-display: "ZCOOL QingKe HuangYou", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --f-body: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --line: 3px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --cover: #110f1b; --page: #1f1c30; --ink: #fdf3cf; --red: #ff4a36; --blue: #86aaff; --ray-a: #3b2b7c; --ray-b: #271b58; --ray-glow: #c08cff;
+    --well: #2c2845; --dim: #a79f8c; --on-red: #17130f; --name: #ffd21f; --shadow: #000000; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --cover: #110f1b; --page: #1f1c30; --ink: #fdf3cf; --red: #ff4a36; --blue: #86aaff; --ray-a: #3b2b7c; --ray-b: #271b58; --ray-glow: #c08cff;
+  --well: #2c2845; --dim: #a79f8c; --on-red: #17130f; --name: #ffd21f; --shadow: #000000; color-scheme: dark;
+}
+
+html { height: 100%; box-sizing: border-box; padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); }
+body { height: 100%; margin: 0; overflow: hidden; background: var(--cover); color: var(--ink); font: 14px/1.5 var(--f-body); -webkit-font-smoothing: antialiased; }
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+button:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+
+#app {
+  height: 100%; display: grid; gap: 12px; padding-block: 12px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas: "top top" "stage card" "console card";
+}
+#gl { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; image-rendering: pixelated; }
+
+/* 面板与按钮的共同线条 */
+.panel { background: var(--page); border: var(--line) solid var(--ink); border-radius: 8px; box-shadow: 4px 4px 0 var(--shadow); }
+.btn { background: var(--page); border: var(--line) solid var(--ink); border-radius: 6px; padding: 6px 12px; font-weight: 700; box-shadow: 3px 3px 0 var(--shadow); transition: transform .06s, box-shadow .06s; }
+.btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--shadow); }
+.btn[disabled] { opacity: .5; cursor: default; }
+
+/* 顶栏 */
+.top { grid-area: top; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.top h1 { margin: 0; font: 400 30px/1 var(--f-display); letter-spacing: 1px; color: var(--red); text-shadow: 2px 2px 0 var(--shadow); white-space: nowrap; }
+.tabs { display: flex; border: var(--line) solid var(--ink); border-radius: 6px; overflow: hidden; background: var(--page); }
+.tabs button { border: 0; background: none; padding: 5px 14px; font-weight: 700; }
+.tabs button[aria-selected="true"] { background: var(--ink); color: var(--page); }
+.tools { margin-left: auto; display: flex; gap: 8px; }
+.tools b { font-variant-numeric: tabular-nums; }
+#snd[aria-pressed="false"] { text-decoration: line-through; opacity: .6; }
+
+/* 舞台 */
+#stage { grid-area: stage; position: relative; overflow: hidden; min-height: 0; border: var(--line) solid var(--ink); border-radius: 8px; background: var(--ray-b); box-shadow: 4px 4px 0 var(--shadow); touch-action: none; cursor: grab; }
+#stage.drag { cursor: grabbing; }
+/* 3D 画面按低分辨率渲染后放大；上面盖一层扫描线，像接在老电视上 */
+#stage::after, .win::before { content: ""; position: absolute; inset: 0; z-index: 3; pointer-events: none; background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0, 0, 0, .08) 2px 3px); }
+#banner { position: absolute; left: 14px; right: 14px; top: 30px; z-index: 3; pointer-events: none; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; transform: rotate(-3deg); transform-origin: left center; }
+#banner small { background: var(--ink); color: var(--page); font-weight: 700; font-size: 13px; padding: 1px 8px; letter-spacing: 1px; }
+#banner strong { font: 400 clamp(40px, 8.5vw, 88px)/1 var(--f-display); color: var(--name); letter-spacing: 2px;
+  text-shadow: -3px -3px 0 #17130f, 3px -3px 0 #17130f, -3px 3px 0 #17130f, 3px 3px 0 #17130f, 0 -3px 0 #17130f, 0 3px 0 #17130f, -3px 0 0 #17130f, 3px 0 0 #17130f, 7px 7px 0 #de2a1b; }
+#banner .st { font-size: 22px; letter-spacing: 3px; color: var(--name); text-shadow: 2px 2px 0 #17130f, -1px -1px 0 #17130f, 1px -1px 0 #17130f, -1px 1px 0 #17130f; }
+#banner.slam strong { animation: slam .5s cubic-bezier(.2, 1.4, .4, 1) both; }
+#banner.slam small, #banner.slam .st { animation: rise .4s .25s both; }
+@keyframes slam { from { transform: scale(3.2); opacity: 0; } 60% { opacity: 1; } to { transform: scale(1); } }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.hint { position: absolute; left: 12px; bottom: 8px; margin: 0; z-index: 3; font-size: 12px; color: #fff8e3; opacity: .75; pointer-events: none; }
+#sheetBtn { position: absolute; right: 10px; bottom: 10px; z-index: 3; display: none; }
+#flash { position: absolute; inset: 0; background: #fff; opacity: 0; z-index: 3; pointer-events: none; }
+#flash.on { animation: flash .55s ease-out; }
+@keyframes flash { from { opacity: .9; } to { opacity: 0; } }
+
+/* 操作台 */
+#console { grid-area: console; display: flex; justify-content: center; align-items: stretch; gap: 14px; padding: 12px 14px; }
+.reel { width: 176px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.win { position: relative; display: block; width: 100%; height: 150px; padding: 0; border: var(--line) solid var(--ink); border-radius: 6px; overflow: hidden;
+  background: var(--well); }
+.win::after { content: ""; position: absolute; inset: 0; z-index: 3; pointer-events: none; box-shadow: inset 0 14px 12px -10px var(--shadow), inset 0 -14px 12px -10px var(--shadow); opacity: .45; }
+.win.thunk { animation: thunk .22s; }
+@keyframes thunk { 30% { transform: translateY(5px); } }
+.lab { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.lab > span { flex: 1; min-width: 0; text-align: center; line-height: 1.15; }
+.lab small { display: block; font-size: 11px; letter-spacing: 2px; color: var(--dim); }
+.lab b { display: block; font: 400 22px/1.1 var(--f-display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.reel.a .lab b { color: var(--blue); }
+.reel.b .lab b { color: var(--red); }
+.step { border: var(--line) solid var(--ink); border-radius: 6px; background: var(--page); width: 30px; height: 30px; padding: 0; font-weight: 900; line-height: 1; visibility: hidden; }
+.mode-custom .step { visibility: visible; }
+.op { align-self: center; font: 400 44px/1 var(--f-display); padding-bottom: 40px; }
+.act { display: flex; flex-direction: column; gap: 10px; justify-content: center; width: 150px; }
+#go { background: var(--red); color: var(--on-red); border: var(--line) solid var(--ink); border-radius: 10px; padding: 14px 10px; font: 400 34px/1 var(--f-display); letter-spacing: 2px; box-shadow: 0 7px 0 var(--shadow); transition: transform .06s, box-shadow .06s; }
+#go:active { transform: translateY(5px); box-shadow: 0 2px 0 var(--shadow); }
+#go[disabled] { transform: translateY(5px); box-shadow: 0 2px 0 var(--shadow); opacity: .65; cursor: default; }
+
+/* 档案卡 */
+#card { grid-area: card; overflow: auto; padding: 16px 16px 20px; min-height: 0; }
+#card .x { display: none; }
+.c-top { display: flex; justify-content: space-between; align-items: baseline; font-weight: 700; }
+.c-top .no { background: var(--ink); color: var(--page); padding: 0 8px; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+.c-top .st { color: var(--red); letter-spacing: 2px; font-size: 16px; }
+#card h2 { margin: 10px 0 2px; font: 400 44px/1.05 var(--f-display); color: var(--red); letter-spacing: 1px; text-wrap: balance; }
+.epi { margin: 0; font-weight: 700; font-size: 15px; }
+.mix { margin: 6px 0 0; color: var(--dim); }
+.mix b { color: var(--ink); }
+#card h3 { margin: 16px 0 6px; font-size: 12px; letter-spacing: 3px; color: var(--dim); border-top: 2px solid var(--ink); padding-top: 8px; }
+.facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin: 14px 0 0; }
+.facts div { min-width: 0; }
+.facts .wide { grid-column: 1 / -1; }
+.facts dt { font-size: 11px; letter-spacing: 2px; color: var(--dim); }
+.facts dd { margin: 0; font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; }
+.parts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.parts li { border: 2px solid var(--ink); border-radius: 4px; padding: 1px 8px 1px 0; font-weight: 700; font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.parts li span { background: var(--ink); color: var(--page); padding: 1px 6px; font-weight: 400; }
+.parts .A { border-color: var(--blue); } .parts .A span { background: var(--blue); }
+.parts .B { border-color: var(--red); } .parts .B span { background: var(--red); color: var(--on-red); }
+.parts .none { border-color: var(--dim); color: var(--dim); } .parts .none span { background: var(--dim); }
+.bars { display: grid; gap: 6px; }
+.bars div { display: grid; grid-template-columns: 4em minmax(0, 1fr) 2.6em; gap: 8px; align-items: center; font-weight: 700; font-size: 13px; }
+.bars i { height: 12px; border: 2px solid var(--ink); border-radius: 2px; background: linear-gradient(var(--red), var(--red)) 0 0 / var(--v) 100% no-repeat; transition: background-size .7s cubic-bezier(.2, .8, .2, 1); }
+.bars b { text-align: right; font-variant-numeric: tabular-nums; }
+.lore { margin: 0; font-size: 15px; line-height: 1.7; }
+
+/* 弹窗：选择与图鉴 */
+dialog { border: var(--line) solid var(--ink); border-radius: 8px; background: var(--page); color: var(--ink); padding: 0; width: min(680px, calc(100vw - 32px)); max-height: 82%; box-shadow: 6px 6px 0 var(--shadow); }
+dialog::backdrop { background: rgba(10, 8, 6, .55); }
+.d-head { position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; background: var(--page); border-bottom: var(--line) solid var(--ink); z-index: 1; }
+.d-head h2 { margin: 0; font: 400 24px/1 var(--f-display); }
+.d-head p { margin: 0; color: var(--dim); font-size: 12px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; padding: 16px; }
+.cell { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 4px 8px; border: 2px solid var(--ink); border-radius: 6px; background: var(--well); font-weight: 700; min-width: 0; }
+.cell img { width: 88px; height: 88px; max-width: 100%; image-rendering: pixelated; }
+.cell span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cell small { color: var(--red); letter-spacing: 1px; font-size: 11px; }
+.cell[aria-current="true"] { background: var(--ink); color: var(--page); }
+.empty { margin: 0; padding: 28px 16px 32px; text-align: center; color: var(--dim); }
+
+.loading { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); margin: 0; z-index: 3; padding: 6px 14px; background: var(--ink); color: var(--page); font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.credit { padding: 14px 16px 20px; }
+.credit p { margin: 0 0 4px; line-height: 1.7; }
+.credit a { color: var(--blue); }
+.credit h3 { margin: 14px 0 6px; font-size: 12px; letter-spacing: 3px; color: var(--dim); border-top: 2px solid var(--ink); padding-top: 8px; }
+.credit ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.credit li { display: grid; grid-template-columns: 5em minmax(0, 1fr) auto; gap: 10px; align-items: baseline; }
+.credit li span { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nogl-msg { display: none; }
+.nogl .nogl-msg { display: block; position: fixed; inset: auto 16px 16px; z-index: 9; padding: 12px 16px; font-weight: 700; }
+
+@media (max-width: 860px) {
+  #app { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "stage" "console"; gap: 10px; padding-block: 10px; }
+  .top h1 { font-size: 24px; }
+  .tabs button { padding: 4px 10px; }
+  #console { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px 6px; padding: 10px; }
+  .reel { width: auto; }
+  .win { height: clamp(88px, 16vh, 136px); }
+  .op { font-size: 30px; padding-bottom: 36px; }
+  .lab b { font-size: 19px; }
+  .act { grid-column: 1 / -1; flex-direction: row; width: auto; }
+  #go { flex: 1; padding: 10px; font-size: 28px; }
+  #reroll { flex: none; align-self: stretch; margin-bottom: 7px; }
+  #sheetBtn { display: block; }
+  .hint { display: none; }
+  #card { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; max-height: 78%; border-radius: 12px 12px 0 0; border-bottom: 0; box-shadow: 0 -4px 0 var(--shadow);
+    padding: 16px max(16px, env(safe-area-inset-right, 0px)) calc(20px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+    transform: translateY(105%); transition: transform .25s cubic-bezier(.2, .8, .2, 1); }
+  #card.open { transform: none; }
+  #card .x { display: block; position: sticky; top: 0; float: right; margin: 0 0 6px 10px; z-index: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #banner.slam strong, #banner.slam small, #banner.slam .st, #flash.on, .win.thunk { animation: none; }
+  #card, .bars i { transition: none; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <h1>缝合兽制造机</h1>
+    <div class="tabs" role="tablist" aria-label="玩法">
+      <button id="tabSlot" role="tab" aria-selected="true">老虎机</button>
+      <button id="tabCustom" role="tab" aria-selected="false">自定义</button>
+    </div>
+    <div class="tools">
+      <button class="btn" id="dexBtn">图鉴 <b id="dexN">0/400</b></button>
+      <button class="btn" id="snd" aria-pressed="true">音效</button>
+      <button class="btn" id="creditBtn">素材出处</button>
+    </div>
+  </header>
+
+  <main id="stage" aria-label="合体舞台">
+    <div id="banner" hidden><small id="bNo"></small><strong id="bName"></strong><span class="st" id="bSt"></span></div>
+    <p class="loading" id="loading" role="status">正在搬运素材…</p>
+    <p class="hint">拖动转一转，滚轮拉远近</p>
+    <button class="btn" id="sheetBtn">看档案</button>
+    <div id="flash" aria-hidden="true"></div>
+  </main>
+
+  <section id="console" class="panel" aria-label="操作台">
+    <div class="reel a">
+      <button class="win" id="winA" aria-label="挑一种生物"></button>
+      <div class="lab">
+        <button class="step" data-reel="a" data-d="-1" aria-label="上一种生物">&lsaquo;</button>
+        <span><small>生物</small><b id="nameA"></b></span>
+        <button class="step" data-reel="a" data-d="1" aria-label="下一种生物">&rsaquo;</button>
+      </div>
+    </div>
+    <div class="op" aria-hidden="true">＋</div>
+    <div class="reel b">
+      <button class="win" id="winB" aria-label="挑一件东西"></button>
+      <div class="lab">
+        <button class="step" data-reel="b" data-d="-1" aria-label="上一件东西">&lsaquo;</button>
+        <span><small>东西</small><b id="nameB"></b></span>
+        <button class="step" data-reel="b" data-d="1" aria-label="下一件东西">&rsaquo;</button>
+      </div>
+    </div>
+    <div class="act">
+      <button id="go">拉杆！</button>
+      <button class="btn" id="reroll">换个缝法</button>
+    </div>
+  </section>
+
+  <aside id="card" class="panel" aria-label="怪兽档案">
+    <button class="btn x" id="sheetX">收起</button>
+    <div id="cardBody"></div>
+  </aside>
+</div>
+
+<canvas id="gl" aria-hidden="true"></canvas>
+
+<dialog id="picker" aria-labelledby="pickTitle">
+  <div class="d-head"><h2 id="pickTitle">挑一种生物</h2><button class="btn" data-close>关闭</button></div>
+  <div class="grid" id="pickGrid"></div>
+</dialog>
+<dialog id="dex" aria-labelledby="dexTitle">
+  <div class="d-head"><div><h2 id="dexTitle">图鉴</h2><p id="dexSub"></p></div><button class="btn" data-close>关闭</button></div>
+  <div class="grid" id="dexGrid"></div>
+  <p class="empty" id="dexEmpty" hidden>还没有缝出过怪兽。拉一下拉杆，缝出来的会记在这里。</p>
+</dialog>
+
+<dialog id="credits" aria-labelledby="creditTitle">
+  <div class="d-head"><h2 id="creditTitle">素材出处</h2><button class="btn" data-close>关闭</button></div>
+  <div class="credit">
+    <p>40 个 3D 模型全部来自 <a href="https://poly.pizza" target="_blank" rel="noopener">Poly Pizza</a>。标 CC-BY 3.0 的按<a href="https://creativecommons.org/licenses/by/3.0/" target="_blank" rel="noopener">授权要求</a>署名，CC0 的一并列出。为了减小体积，部分模型的贴图缩小过；缝合时模型会被切开重组。</p>
+    <div id="creditList"></div>
+  </div>
+</dialog>
+
+<p class="panel nogl-msg">这台机器要用 WebGL 画 3D 模型，当前浏览器没能启动它。换一个浏览器或打开硬件加速再试。</p>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.147.0/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="js/kit.js"></script>
+<script src="js/data.js"></script>
+<script src="js/credits.js"></script>
+<script src="js/models.js"></script>
+<script src="js/fusion.js"></script>
+<script src="js/main.js"></script>
+<script>if (!window.__stitchReady) document.body.classList.add('nogl');</script>
+</body>
+</html>
